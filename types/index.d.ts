@@ -64,6 +64,8 @@ declare type Account = {
 };
 
 declare type Transaction = {
+  receiverTransactions: any;
+  senderTransactions: any;
   id: string;
   $id: string;
   name: string;

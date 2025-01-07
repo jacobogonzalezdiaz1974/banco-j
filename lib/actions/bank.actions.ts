@@ -9,12 +9,12 @@ import {
   TransferType,
 } from "plaid";
 
-import { plaidClient } from "../plaid";
+//import { plaidClient } from "../plaid.config";
 import { parseStringify } from "../utils";
 
-
-import { getBanks, getBank } from "./user.actions";
 import { getTransactionsByBankId } from "./transaction.actions";
+import { getBanks, getBank } from "./user.actions";
+import { plaidClient } from "../plaid";
 
 // Get multiple bank accounts
 export const getAccounts = async ({ userId }: getAccountsProps) => {
@@ -46,7 +46,7 @@ export const getAccounts = async ({ userId }: getAccountsProps) => {
           type: accountData.type as string,
           subtype: accountData.subtype! as string,
           appwriteItemId: bank.$id,
-          sharaebleId: bank.sharableId,
+          sharableId: bank.sharableId,
         };
 
         return account;
@@ -67,33 +67,48 @@ export const getAccounts = async ({ userId }: getAccountsProps) => {
 // Get one bank account
 export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
   try {
-    // get bank from db
+    // Get bank from db
     const bank = await getBank({ documentId: appwriteItemId });
+    if (!bank) {
+      throw new Error("No se pudo obtener la información del banco.");
+    }
 
-    // get account info from plaid
+    // Get account info from plaid
     const accountsResponse = await plaidClient.accountsGet({
       access_token: bank.accessToken,
     });
+    if (!accountsResponse?.data?.accounts?.length) {
+      throw new Error("No se encontraron cuentas en Plaid.");
+    }
     const accountData = accountsResponse.data.accounts[0];
 
-    // get transfer transactions from appwrite
+    // Get transfer transactions from appwrite
     const transferTransactionsData = await getTransactionsByBankId({
       bankId: bank.$id,
     });
 
-    const transferTransactions = transferTransactionsData.documents.map(
-      (transferData: Transaction) => ({
-        id: transferData.$id,
-        name: transferData.name!,
-        amount: transferData.amount!,
-        date: transferData.$createdAt,
-        paymentChannel: transferData.channel,
-        category: transferData.category,
-        type: transferData.senderBankId === bank.$id ? "debit" : "credit",
-      })
-    );
+    // Combine senderTransactions and receiverTransactions into a single array
+    const combinedTransactions = [
+      ...(Array.isArray(transferTransactionsData.senderTransactions)
+        ? transferTransactionsData.senderTransactions
+        : []),
+      ...(Array.isArray(transferTransactionsData.receiverTransactions)
+        ? transferTransactionsData.receiverTransactions
+        : []),
+    ];
 
-    // get institution info from plaid
+    // Map combined transactions
+    const transferTransactions = combinedTransactions.map((transferData: Transaction) => ({
+      id: transferData.$id || "N/A",
+      name: transferData.name || "Sin nombre",
+      amount: transferData.amount || 0,
+      date: transferData.$createdAt || new Date().toISOString(),
+      paymentChannel: transferData.channel || "Desconocido",
+      category: transferData.category || "Sin categoría",
+      type: transferData.senderBankId === bank.$id ? "debit" : "credit",
+    }));
+
+    // Get institution info from plaid
     const institution = await getInstitution({
       institutionId: accountsResponse.data.item.institution_id!,
     });
@@ -102,6 +117,7 @@ export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
       accessToken: bank?.accessToken,
     });
 
+    // Create account object
     const account = {
       id: accountData.account_id,
       availableBalance: accountData.balances.available!,
@@ -115,19 +131,23 @@ export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
       appwriteItemId: bank.$id,
     };
 
-    // sort transactions by date such that the most recent transaction is first
-      const allTransactions = [...transactions, ...transferTransactions].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
+    // Sort transactions by date
+    const allTransactions = [
+      ...(Array.isArray(transactions) ? transactions : []),
+      ...(Array.isArray(transferTransactions) ? transferTransactions : []),
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return parseStringify({
       data: account,
       transactions: allTransactions,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("An error occurred while getting the account:", error);
+    throw new Error(`Error al obtener la cuenta: ${error.message}`);
   }
 };
+
+
 
 // Get bank info
 export const getInstitution = async ({
@@ -159,6 +179,7 @@ export const getTransactions = async ({
     while (hasMore) {
       const response = await plaidClient.transactionsSync({
         access_token: accessToken,
+
       });
 
       const data = response.data;
@@ -182,5 +203,45 @@ export const getTransactions = async ({
     return parseStringify(transactions);
   } catch (error) {
     console.error("An error occurred while getting the accounts:", error);
+  }
+};
+
+// Create Transfer
+export const createTransfer = async () => {
+  const transferAuthRequest: TransferAuthorizationCreateRequest = {
+    access_token: "access-sandbox-cddd20c1-5ba8-4193-89f9-3a0b91034c25",
+    account_id: "Zl8GWV1jqdTgjoKnxQn1HBxxVBanm5FxZpnQk",
+    funding_account_id: "442d857f-fe69-4de2-a550-0c19dc4af467",
+    type: "credit" as TransferType,
+    network: "ach" as TransferNetwork,
+    amount: "10.00",
+    ach_class: "ppd" as ACHClass,
+    user: {
+      legal_name: "Anne Charleston",
+    },
+  };
+  try {
+    const transferAuthResponse =
+      await plaidClient.transferAuthorizationCreate(transferAuthRequest);
+    const authorizationId = transferAuthResponse.data.authorization.id;
+
+    const transferCreateRequest: TransferCreateRequest = {
+      access_token: "access-sandbox-cddd20c1-5ba8-4193-89f9-3a0b91034c25",
+      account_id: "Zl8GWV1jqdTgjoKnxQn1HBxxVBanm5FxZpnQk",
+      description: "payment",
+      authorization_id: authorizationId,
+    };
+
+    const responseCreateResponse = await plaidClient.transferCreate(
+      transferCreateRequest
+    );
+
+    const transfer = responseCreateResponse.data.transfer;
+    return parseStringify(transfer);
+  } catch (error) {
+    console.error(
+      "An error occurred while creating transfer authorization:",
+      error
+    );
   }
 };

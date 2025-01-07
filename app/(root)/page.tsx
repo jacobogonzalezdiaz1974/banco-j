@@ -1,12 +1,24 @@
 import HeaderBox from "@/components/HeaderBox";
+import RecentTransactions from "@/components/RecentTransactions";
 import RightSidebar from "@/components/RightSidebar";
 import TotalBalanceBox from "@/components/TotalBalanceBox";
+import { getAccount, getAccounts } from "@/lib/actions/bank.actions";
 import { getLoggedInUser } from "@/lib/actions/user.actions";
-import { get } from "http";
+
 import React from "react";
 
-const Home = async () => {
+type SearchParamProps = {
+  searchParams: { id?: string; page?: string };
+};
+
+const Home = async ({ searchParams: { id, page } }: SearchParamProps) => {
+  const currentPage = Number(page as string) || 1;
   const loggedIn = await getLoggedInUser();
+  const accounts = await getAccounts({ userId: loggedIn.$id });
+  if (!accounts) return;
+  const accounstData = accounts?.data;
+  const appwriteItemId = (id as string) || accounstData[0]?.appwriteItemId;
+  const account = await getAccount({ appwriteItemId });
   return (
     <section className="home">
       <div className="home-content">
@@ -14,21 +26,26 @@ const Home = async () => {
           <HeaderBox
             type="greeting"
             title="Welcome"
-            user={loggedIn?.name || "Guest"}
+            user={loggedIn?.firstName || "Guest"}
             subtext="Access and manage your account and transactions"
           />
-          <TotalBalanceBox 
-          accounts={[]}
-          totalBanks={1}
-          totalCurrentBalance={1250.35}
+          <TotalBalanceBox
+            accounts={accounstData}
+            totalBanks={accounts?.totalBanks}
+            totalCurrentBalance={accounts?.totalCurrentBalance}
           />
         </header>
-        RECENT TRANSACTIONS
+        <RecentTransactions
+          accounts={accounstData}
+          transactions={accounts?.transactions}
+          appwriteItemId={appwriteItemId}
+          page={currentPage}
+        />
       </div>
-      <RightSidebar 
-      user={loggedIn}
-      transactions={[]}
-      banks={[{currentBalance: 123.50},{currentBalance: 543.50}]}
+      <RightSidebar
+        user={loggedIn}
+        transactions={account?.transactions}
+        banks={accounstData?.slice(0, 2)}
       />
     </section>
   );
